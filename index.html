@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebRTC with Firebase</title>
+  <style>
+    video { width: 320px; height: 240px; margin: 10px; }
+    button { margin: 10px; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h2>WebRTC Firebase Camera Sharing</h2>
+
+  <video id="localVideo" autoplay muted playsinline></video>
+  <video id="remoteVideo" autoplay playsinline></video>
+
+  <div>
+    <button onclick="createRoom()">Create Room</button>
+    <input id="roomId" placeholder="Room ID">
+    <button onclick="joinRoom()">Join Room</button>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    // Paste your Firebase config below
+// Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyAXU2HiE4Cq8-CTUCjf2qGRuL_OXKhSOUg",
+  authDomain: "webrtc-camera-demo.firebaseapp.com",
+  projectId: "webrtc-camera-demo",
+  storageBucket: "webrtc-camera-demo.firebasestorage.app",
+  messagingSenderId: "633600153979",
+  appId: "1:633600153979:web:931f3055500691ffca45de"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    let pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    let localStream;
+
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+
+    navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
+      localStream = stream;
+      localVideo.srcObject = stream;
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    });
+
+    pc.ontrack = (event) => {
+      remoteVideo.srcObject = event.streams[0];
+    };
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        const roomRef = db.collection('rooms').doc(currentRoomId);
+        roomRef.collection(sender).add(event.candidate.toJSON());
+      }
+    };
+
+    let currentRoomId = '';
+    let sender = '';
+
+    async function createRoom() {
+      const roomRef = await db.collection('rooms').doc();
+      currentRoomId = roomRef.id;
+      sender = 'caller';
+      document.getElementById('roomId').value = currentRoomId;
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const roomWithOffer = {
+        offer: {
+          type: offer.type,
+          sdp: offer.sdp
+        }
+      };
+      await roomRef.set(roomWithOffer);
+
+      roomRef.onSnapshot(async snapshot => {
+        const data = snapshot.data();
+        if (data && data.answer && !pc.currentRemoteDescription) {
+          const answerDesc = new RTCSessionDescription(data.answer);
+          await pc.setRemoteDescription(answerDesc);
+        }
+      });
+
+      roomRef.collection('callee').onSnapshot(snapshot => {
+        snapshot.docChanges().forEach(async change => {
+          if (change.type === 'added') {
+            const candidate = new RTCIceCandidate(change.doc.data());
+            await pc.addIceCandidate(candidate);
+          }
+        });
+      });
+    }
+
+    async function joinRoom() {
+      const roomId = document.getElementById('roomId').value;
+      currentRoomId = roomId;
+      sender = 'callee';
+
+      const roomRef = db.collection('rooms').doc(roomId);
+      const roomSnapshot = await roomRef.get();
+
+      if (roomSnapshot.exists) {
+        const data = roomSnapshot.data();
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        const roomWithAnswer = {
+          answer: {
+            type: answer.type,
+            sdp: answer.sdp
+          }
+        };
+        await roomRef.update(roomWithAnswer);
+
+        roomRef.collection('caller').onSnapshot(snapshot => {
+          snapshot.docChanges().forEach(async change => {
+            if (change.type === 'added') {
+              const candidate = new RTCIceCandidate(change.doc.data());
+              await pc.addIceCandidate(candidate);
+            }
+          });
+        });
+      }
+    }
+  </script>
+</body>
+</html>
